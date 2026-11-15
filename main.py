@@ -14,7 +14,7 @@ scheduler.start()
 # =====================================================================
 # CHAVES E CONFIGURAÇÕES (MANTENHA SEUS DADOS DA JAQUE PINK AQUI)
 # =====================================================================
-ELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
+TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
 VIP_JAQUE_GROUP_ID = "-1002069121485"
 PREVIAS_JAQUE_GROUP_ID = "-1001994331287"
 RENDER_URL_FIXA = "bot-jaquepink.onrender.com"

@@ -5,25 +5,21 @@ import threading
 import time
 from flask import Flask, request
 from datetime import datetime, timedelta
-from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
-scheduler = BackgroundScheduler(job_defaults={"coalesce": True, "max_instances": 10, "misfire_grace_time": 300})
 
 # =====================================================================
-# CHAVES E CONFIGURAÇÕES (PREENCHA OS DADOS DA JAQUE PINK AQUI)
+# CHAVES E CONFIGURAÇÕES (JÁ PREENCHIDAS COM OS DADOS DA JAQUE PINK)
 # =====================================================================
-TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
+TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qy100z-2ydEJzQF6C9gwkSOspFs"
 VIP_JAQUE_GROUP_ID = "-1002069121485"
 PREVIAS_JAQUE_GROUP_ID = "-1001994331287"
 RENDER_URL_FIXA = "adm-jaquepink.onrender.com"
 
-# Dados fixos já aproveitados da sua operação PlayBox
 PUSHINPAY_API_TOKEN = "73774|DCDTM4JGmuvz4MS4g5vPHy2ucM54PkCeQEu7QA4y49fe526b"
 ADMIN_ID = "7008304182"
 VIP_PLAYBOX_GROUP_ID = "-1002019479469"
 
-# True = Aprova entrada no grupo de prévias e já chama o lead no privado
 CHAMAR_NO_PRIVADO_AO_APROVAR = True
 
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
@@ -35,13 +31,18 @@ lock_estado = threading.Lock()
 usuarios = {}
 transacoes_processadas = set()
 
+# Controle do motor de remarketing nativo por PID do worker
+_worker_pid = None
+_lock_worker = threading.Lock()
+_ultima_checagem_assinaturas = 0.0
+
 # =====================================================================
-# MÍDIAS DO FUNIL (COLE OS 4 FILE_IDs AQUI)
+# MÍDIAS DO FUNIL (JÁ PREENCHIDAS COM SEUS 4 FILE_IDs)
 # =====================================================================
-VIDEO_1_GALERIA = "BAACAgEAAxkBAAMCavoug55fcXjT1El_G-E9Qt7SNlcAAqEIAAKHW9BH-qFU6cQ_aDg9BA"
-VIDEO_2_D4 = "BAACAgEAAxkBAAMDavoujCrKcf0PqyFqWfmLTTixV34AAqIIAAKHW9BHKijEHmQ7N2s9BA"
-VIDEO_3_PLAYBOX_OFERTA = "BAACAgEAAxkBAAMFavowGAKrK-hWzVhtrREdnFf-fSMAAqQIAAKHW9BHvUOd7s-Qrjw9BA"
-VIDEO_4_UNICORNIO = "BAACAgEAAxkBAAMEavoulZGdWHGb31O8Kj77i8ZW4AYAAqMIA AKHW9BHvYPbp0FwBXg9BA"
+VIDEO_1_GALERIA = "BAACAgEAAxkBAAMCavoug55fcXjT1El_G-E9Qt7SN1cAAqEIAAKHW9BH-qFU6cQ_aDg9BA"
+VIDEO_2_D4 = "BAACAgEAAxkBAAMDavoujCrKcf0PqyFqWfMLT1xV34AAqIIAAKHW9BHK1jEHmQ7N2s9BA"
+VIDEO_3_PLAYBOX_OFERTA = "BAACAgEAAxkBAAMFavowGAKrK-hWzVhtrREdnFf-fSMAaqQIAAKHW9BHvU0d7s-Qrjw9BA"
+VIDEO_4_UNICORNIO = "BAACAgEAAxkBAAMEavou12GdWHGb31OBkj7718ZW4AYAAqMIAAKHW9BHvYpbp0FwBXg9BA"
 
 # =====================================================================
 # TABELA DE PLANOS, ORDER BUMP E DESCONTOS DE RENOVAÇÃO
@@ -53,23 +54,34 @@ PLANOS = {
         "nome": "1 Semana (7 dias)",
         "dias": 7,
         "preco": 9.90,
-        "preco_renov": 9.40,   # 5% de desconto
+        "preco_renov": 9.40,   # 5% OFF
         "desconto_txt": "5% OFF"
     },
     "30d": {
         "nome": "1 Mês (30 dias)",
         "dias": 30,
         "preco": 19.90,
-        "preco_renov": 16.90,  # 15% de desconto
+        "preco_renov": 16.90,  # 15% OFF
         "desconto_txt": "15% OFF"
     },
     "vit": {
         "nome": "Acesso Vitalício",
         "dias": None,
         "preco": 59.90,
-        "preco_renov": 47.90,  # 20% de desconto
+        "preco_renov": 47.90,  # 20% OFF
         "desconto_txt": "20% OFF"
     }
+}
+
+# Tempos do remarketing em segundos: 4m -> 6m -> 12m -> 25m -> 3h (infinito)
+TEMPOS_REMARKETING_SEGUNDOS = [240, 360, 720, 1500, 10800]
+
+ETAPAS_COM_REMARKETING = {
+    "INICIO_SEM_CLIQUE",
+    "VENDO_BUMP_PLAYBOX",
+    "AGUARDANDO_PIX",
+    "RENOVANDO_PIX",
+    "EXPIROU_RENOVACAO"
 }
 
 # =====================================================================
@@ -106,7 +118,6 @@ TEXTO_INSTRUCOES_PIX = (
     "⬇️ **COPIE SEU CÓDIGO PIX ABAIXO** ⬇️"
 )
 
-# Copys rotativas para Etapa 1, 3, 4 e 5 (intercalando Vídeo 1 Galeria e Vídeo 2 D4)
 COPYS_REMARKETING_ROTACAO = [
     (
         "🚕 **VOCÊ NÃO VIU COMO ESSA CORRIDA DO UBER TERMINOU...**\n\n"
@@ -144,7 +155,6 @@ COPY_REMARKETING_PLAYBOX_6 = (
     "👇 **Aproveite essa condição antes que saia do ar:**"
 )
 
-# Copys exclusivas para o Remarketing da Etapa 2 (Order Bump PlayBox - sempre Vídeo 3)
 COPYS_REMARKETING_BUMP_PLAYBOX = [
     (
         "💣 **VOCÊ DEIXOU O VIP VITALÍCIO DA PLAYBOX PARA TRÁS...**\n\n"
@@ -170,17 +180,6 @@ COPYS_REMARKETING_BUMP_PLAYBOX = [
 
 
 # =====================================================================
-# INICIALIZAÇÃO SEGURA DO SCHEDULER NO WORKER
-# =====================================================================
-def garantir_scheduler_ativo():
-    if not scheduler.running:
-        scheduler.start()
-        print("🚀 BackgroundScheduler iniciado no worker ativo!", flush=True)
-    if not scheduler.get_job("checar_vencimentos"):
-        scheduler.add_job(verificar_assinaturas_background, "interval", minutes=5, id="checar_vencimentos", replace_existing=True)
-
-
-# =====================================================================
 # PERSISTÊNCIA DE ESTADO EM DISCO
 # =====================================================================
 def salvar_estado():
@@ -198,7 +197,6 @@ def salvar_estado():
 
 def carregar_estado():
     global usuarios, transacoes_processadas
-    garantir_scheduler_ativo()
     if not os.path.exists(ARQUIVO_ESTADO):
         return
     try:
@@ -206,19 +204,6 @@ def carregar_estado():
             dados = json.load(f)
         usuarios = {int(k): v for k, v in dados.get("usuarios", {}).items()}
         transacoes_processadas = set(dados.get("transacoes", []))
-
-        etapas_ativas = [
-            "INICIO_SEM_CLIQUE",
-            "VENDO_BUMP_PLAYBOX",
-            "AGUARDANDO_PIX",
-            "RENOVANDO_PIX",
-            "EXPIROU_RENOVACAO"
-        ]
-        for cid, info in usuarios.items():
-            st = info.get("status")
-            if st in etapas_ativas:
-                cont = int(info.get("rmk_contagem", 0))
-                agendar_remarketing(cid, st, cont)
     except Exception as e:
         print(f"Erro ao carregar estado: {e}", flush=True)
 
@@ -272,7 +257,6 @@ def enviar_video(chat_id, video_id, legenda=None, markup=None):
 
         print(f"⚠️ Erro sendVideo ({req.status_code}): {req.text}", flush=True)
 
-        # Fallback 1: Reenvia sem Markdown
         if legenda:
             payload_sem_md = dict(payload)
             payload_sem_md.pop("parse_mode", None)
@@ -280,7 +264,6 @@ def enviar_video(chat_id, video_id, legenda=None, markup=None):
             if req2.status_code == 200:
                 return True
 
-        # Fallback 2: Tenta como Animation/GIF (caso o vídeo tenha sido enviado sem áudio CgAC...)
         payload_anim = {"chat_id": chat_id, "animation": video_id}
         if legenda:
             payload_anim["caption"] = legenda
@@ -290,7 +273,6 @@ def enviar_video(chat_id, video_id, legenda=None, markup=None):
         if req3.status_code == 200:
             return True
 
-        # Fallback 3: Garante entrega da copy + botões em texto caso o file_id esteja inválido
         if legenda:
             enviar_mensagem(chat_id, legenda, markup)
             return True
@@ -394,6 +376,99 @@ def consultar_pagamento_pushinpay(tx_id):
 
 
 # =====================================================================
+# AGENDAMENTO E DISPARO DO REMARKETING (PURO PYTHON / IMUNE A FORK)
+# =====================================================================
+def obter_intervalo_segundos(contagem):
+    idx = min(int(contagem), len(TEMPOS_REMARKETING_SEGUNDOS) - 1)
+    return TEMPOS_REMARKETING_SEGUNDOS[idx]
+
+
+def programar_proximo_remarketing(chat_id, etapa, contagem, atraso_customizado=None):
+    garantir_loop_worker()
+    chat_id = int(chat_id)
+    info = usuarios.setdefault(chat_id, {})
+    info["status"] = etapa
+    info["rmk_contagem"] = int(contagem)
+    espera = int(atraso_customizado) if atraso_customizado is not None else obter_intervalo_segundos(contagem)
+    info["proximo_rmk_em"] = time.time() + espera
+    salvar_estado()
+    print(f"⏰ [RMK PROGRAMADO] Lead: {chat_id} | Etapa: {etapa} | Passo: {contagem + 1} | Em: {espera}s", flush=True)
+
+
+def _montar_botoes_remarketing(chat_id, tipo_funil):
+    user_info = usuarios.get(chat_id, {})
+    plano_cod = user_info.get("plano_pendente") or user_info.get("plano_ativo") or "7d"
+    dados_plano = PLANOS.get(plano_cod, PLANOS["7d"])
+
+    if tipo_funil in ["EXPIROU_RENOVACAO", "RENOVANDO_PIX"]:
+        return {
+            "inline_keyboard": [
+                [{"text": f"🔄 Renovar 7 dias ({PLANOS['7d']['desconto_txt']}) - R$ {PLANOS['7d']['preco_renov']:.2f}", "callback_data": "renovar_7d"}],
+                [{"text": f"🔥 Renovar 1 Mês ({PLANOS['30d']['desconto_txt']}) - R$ {PLANOS['30d']['preco_renov']:.2f}", "callback_data": "renovar_30d"}],
+                [{"text": f"👑 Vitalício ({PLANOS['vit']['desconto_txt']}) - R$ {PLANOS['vit']['preco_renov']:.2f}", "callback_data": "renovar_vit"}]
+            ]
+        }
+
+    if tipo_funil == "INICIO_SEM_CLIQUE":
+        return {
+            "inline_keyboard": [
+                [{"text": "🔥 1 Semana (7 dias) — R$ 9,90", "callback_data": "escolher_7d"}],
+                [{"text": "💎 1 Mês (30 dias) — R$ 19,90", "callback_data": "escolher_30d"}],
+                [{"text": "👑 Acesso Vitalício — R$ 59,90", "callback_data": "escolher_vit"}]
+            ]
+        }
+
+    valor_combo = dados_plano["preco"] + PRECO_BUMP_PLAYBOX
+    return {
+        "inline_keyboard": [
+            [{"text": f"💣 Jaque + VIP PlayBox — R$ {valor_combo:.2f}", "callback_data": "fechar_combo"}],
+            [{"text": f"🦄 Apenas VIP Jaque ({dados_plano['nome']}) — R$ {dados_plano['preco']:.2f}", "callback_data": "fechar_solo"}]
+        ]
+    }
+
+
+def _escolher_video_sequencia_padrao(contagem):
+    num_envio = contagem + 1
+
+    # 1º envio e a cada 4 vídeos -> Vídeo Unicórnio
+    if num_envio == 1 or num_envio % 4 == 0:
+        return VIDEO_4_UNICORNIO, COPY_REMARKETING_UNICORNIO
+
+    # 6º vídeo (e múltiplos de 6 que não caíram no 4) -> Oferta VIP PlayBox
+    if num_envio % 6 == 0:
+        return VIDEO_3_PLAYBOX_OFERTA, COPY_REMARKETING_PLAYBOX_6
+
+    # Demais envios -> Intercala Vídeo 1 (Galeria) e Vídeo 2 (D4) variando as copys
+    comuns_anteriores = sum(
+        1 for i in range(1, num_envio)
+        if i != 1 and (i % 4 != 0) and (i % 6 != 0)
+    )
+    copy_escolhida = COPYS_REMARKETING_ROTACAO[comuns_anteriores % len(COPYS_REMARKETING_ROTACAO)]
+
+    if comuns_anteriores % 2 == 0:
+        return VIDEO_1_GALERIA, copy_escolhida
+    else:
+        return VIDEO_2_D4, copy_escolhida
+
+
+def executar_disparo_remarketing(chat_id, tipo_funil, contagem):
+    chat_id = int(chat_id)
+    print(f"🔥 [RMK ENVIANDO AGORA] Lead: {chat_id} | Etapa: {tipo_funil} | Passo: {contagem + 1}", flush=True)
+    try:
+        markup = _montar_botoes_remarketing(chat_id, tipo_funil)
+
+        if tipo_funil == "VENDO_BUMP_PLAYBOX":
+            copy_bump = COPYS_REMARKETING_BUMP_PLAYBOX[contagem % len(COPYS_REMARKETING_BUMP_PLAYBOX)]
+            enviar_video(chat_id, VIDEO_3_PLAYBOX_OFERTA, copy_bump, markup)
+        else:
+            video_id, legenda = _escolher_video_sequencia_padrao(contagem)
+            enviar_video(chat_id, video_id, legenda, markup)
+
+    except Exception as e:
+        print(f"❌ Erro ao disparar remarketing ({chat_id}): {e}", flush=True)
+
+
+# =====================================================================
 # ENTREGA DO PIX (SEM IMAGEM + RESET DE REMARKETING)
 # =====================================================================
 def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=False, eh_renovacao=False):
@@ -409,14 +484,11 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
         user_info["eh_renovacao_pendente"] = eh_renovacao
 
         if user_info.get("status") == "VIP_ATIVO":
-            user_info["status"] = "RENOVANDO_PIX"
+            nova_etapa = "RENOVANDO_PIX"
         elif user_info.get("status") == "EXPIROU_RENOVACAO" or eh_renovacao:
-            user_info["status"] = "EXPIROU_RENOVACAO"
+            nova_etapa = "EXPIROU_RENOVACAO"
         else:
-            user_info["status"] = "AGUARDANDO_PIX"
-
-        user_info["rmk_contagem"] = 0
-        salvar_estado()
+            nova_etapa = "AGUARDANDO_PIX"
 
         enviar_mensagem(chat_id, TEXTO_INSTRUCOES_PIX)
         time.sleep(0.4)
@@ -441,7 +513,8 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
         }
         enviar_mensagem(chat_id, f"`{codigo_pix}`", markup_pix)
 
-        agendar_remarketing(chat_id, user_info["status"], 0)
+        # Reseta sempre o tempo do remarketing para o início (4 min -> Vídeo Unicórnio)
+        programar_proximo_remarketing(chat_id, nova_etapa, 0)
     else:
         enviar_mensagem(chat_id, f"❌ *Erro de comunicação com o banco. Tente novamente!*\n`{erro}`")
 
@@ -488,14 +561,10 @@ def processar_pagamento_aprovado(chat_id, tx_id=None):
     user_info["expira_em"] = nova_expiracao
     user_info["aviso_nivel"] = 0
     user_info["tx_id"] = None
+    user_info["proximo_rmk_em"] = None
     user_info["inclui_playbox_pendente"] = False
     user_info["eh_renovacao_pendente"] = False
     salvar_estado()
-
-    try:
-        scheduler.remove_job(f"rmk_{chat_id}")
-    except Exception:
-        pass
 
     link_jaque = gerar_link_convite_unico(VIP_JAQUE_GROUP_ID) or "LINK_VIP_JAQUE_AQUI"
     mensagem_entrega = (
@@ -515,126 +584,6 @@ def processar_pagamento_aprovado(chat_id, tx_id=None):
 
     enviar_mensagem(chat_id, mensagem_entrega)
     return True
-
-
-# =====================================================================
-# MOTOR DE REMARKETING INFINITO EM TODAS AS ETAPAS
-# =====================================================================
-def agendar_remarketing(chat_id, tipo_funil, contagem, atraso_segundos=None):
-    garantir_scheduler_ativo()
-    chat_id = int(chat_id)
-    if chat_id in usuarios:
-        usuarios[chat_id]["rmk_contagem"] = contagem
-        salvar_estado()
-
-    if atraso_segundos is not None:
-        tempo = timedelta(seconds=atraso_segundos)
-    elif contagem == 0:
-        tempo = timedelta(minutes=4)
-    elif contagem == 1:
-        tempo = timedelta(minutes=6)
-    elif contagem == 2:
-        tempo = timedelta(minutes=12)
-    elif contagem == 3:
-        tempo = timedelta(minutes=25)
-    else:
-        tempo = timedelta(hours=3)
-
-    job_id = f"rmk_{chat_id}"
-    try:
-        scheduler.remove_job(job_id)
-    except Exception:
-        pass
-
-    data_execucao = datetime.now() + tempo
-    scheduler.add_job(
-        disparar_remarketing,
-        'date',
-        run_date=data_execucao,
-        args=[chat_id, tipo_funil, contagem],
-        id=job_id,
-        replace_existing=True
-    )
-    print(f"⏰ [RMK AGENDADO] Lead: {chat_id} | Etapa: {tipo_funil} | Passo: {contagem + 1} | Em: {tempo}", flush=True)
-
-
-def _montar_botoes_remarketing(chat_id, tipo_funil):
-    user_info = usuarios.get(chat_id, {})
-    plano_cod = user_info.get("plano_pendente") or user_info.get("plano_ativo") or "7d"
-    dados_plano = PLANOS.get(plano_cod, PLANOS["7d"])
-
-    if tipo_funil in ["EXPIROU_RENOVACAO", "RENOVANDO_PIX"]:
-        return {
-            "inline_keyboard": [
-                [{"text": f"🔄 Renovar 7 dias ({PLANOS['7d']['desconto_txt']}) - R$ {PLANOS['7d']['preco_renov']:.2f}", "callback_data": "renovar_7d"}],
-                [{"text": f"🔥 Renovar 1 Mês ({PLANOS['30d']['desconto_txt']}) - R$ {PLANOS['30d']['preco_renov']:.2f}", "callback_data": "renovar_30d"}],
-                [{"text": f"👑 Vitalício ({PLANOS['vit']['desconto_txt']}) - R$ {PLANOS['vit']['preco_renov']:.2f}", "callback_data": "renovar_vit"}]
-            ]
-        }
-
-    if tipo_funil == "INICIO_SEM_CLIQUE":
-        return {
-            "inline_keyboard": [
-                [{"text": "🔥 1 Semana (7 dias) — R$ 9,90", "callback_data": "escolher_7d"}],
-                [{"text": "💎 1 Mês (30 dias) — R$ 19,90", "callback_data": "escolher_30d"}],
-                [{"text": "👑 Acesso Vitalício — R$ 59,90", "callback_data": "escolher_vit"}]
-            ]
-        }
-
-    valor_combo = dados_plano["preco"] + PRECO_BUMP_PLAYBOX
-    return {
-        "inline_keyboard": [
-            [{"text": f"💣 Jaque + VIP PlayBox — R$ {valor_combo:.2f}", "callback_data": "fechar_combo"}],
-            [{"text": f"🦄 Apenas VIP Jaque ({dados_plano['nome']}) — R$ {dados_plano['preco']:.2f}", "callback_data": "fechar_solo"}]
-        ]
-    }
-
-
-def _escolher_video_sequencia_padrao(contagem):
-    num_envio = contagem + 1
-
-    if num_envio == 1 or num_envio % 4 == 0:
-        return VIDEO_4_UNICORNIO, COPY_REMARKETING_UNICORNIO
-
-    if num_envio % 6 == 0:
-        return VIDEO_3_PLAYBOX_OFERTA, COPY_REMARKETING_PLAYBOX_6
-
-    comuns_anteriores = sum(
-        1 for i in range(1, num_envio)
-        if i != 1 and (i % 4 != 0) and (i % 6 != 0)
-    )
-    copy_escolhida = COPYS_REMARKETING_ROTACAO[comuns_anteriores % len(COPYS_REMARKETING_ROTACAO)]
-
-    if comuns_anteriores % 2 == 0:
-        return VIDEO_1_GALERIA, copy_escolhida
-    else:
-        return VIDEO_2_D4, copy_escolhida
-
-
-def disparar_remarketing(chat_id, tipo_funil, contagem):
-    chat_id = int(chat_id)
-    status_atual = usuarios.get(chat_id, {}).get("status")
-    print(f"🔥 [RMK DISPARANDO] Lead: {chat_id} | Esperado: {tipo_funil} | Atual: {status_atual} | Passo: {contagem + 1}", flush=True)
-
-    if status_atual != tipo_funil or status_atual == "VIP_ATIVO":
-        return
-
-    def envio_background():
-        try:
-            markup = _montar_botoes_remarketing(chat_id, tipo_funil)
-
-            if tipo_funil == "VENDO_BUMP_PLAYBOX":
-                copy_bump = COPYS_REMARKETING_BUMP_PLAYBOX[contagem % len(COPYS_REMARKETING_BUMP_PLAYBOX)]
-                enviar_video(chat_id, VIDEO_3_PLAYBOX_OFERTA, copy_bump, markup)
-            else:
-                video_id, legenda = _escolher_video_sequencia_padrao(contagem)
-                enviar_video(chat_id, video_id, legenda, markup)
-
-        except Exception as e:
-            print(f"❌ Erro no remarketing ({chat_id}): {e}", flush=True)
-
-    threading.Thread(target=envio_background).start()
-    agendar_remarketing(chat_id, tipo_funil, contagem + 1)
 
 
 # =====================================================================
@@ -665,7 +614,8 @@ def verificar_assinaturas_background():
         if horas_restantes <= 0:
             remover_usuario_vip(chat_id)
             info["status"] = "EXPIROU_RENOVACAO"
-            info["rmk_contagem"] = 0
+            info["rmk_contagem"] = 1
+            info["proximo_rmk_em"] = time.time() + obter_intervalo_segundos(1)
             alterou = True
 
             markup_exp = _montar_botoes_remarketing(chat_id, "EXPIROU_RENOVACAO")
@@ -679,7 +629,6 @@ def verificar_assinaturas_background():
                 "👇 **Escolha abaixo para gerar seu PIX e voltar na hora:**"
             )
             enviar_video(chat_id, VIDEO_4_UNICORNIO, texto_expirou, markup_exp)
-            agendar_remarketing(chat_id, "EXPIROU_RENOVACAO", 1)
 
         elif horas_restantes <= 1.0 and aviso_nivel < 3:
             info["aviso_nivel"] = 3
@@ -736,19 +685,81 @@ def verificar_assinaturas_background():
 
 
 # =====================================================================
+# LOOP PRINCIPAL DO WORKER (RODA A CADA 5 SEGUNDOS SEM FALHAR)
+# =====================================================================
+def _loop_vigilante_worker():
+    global _ultima_checagem_assinaturas
+    pid_atual = os.getpid()
+    print(f"🚀 Motor de Remarketing iniciado com sucesso no PID {pid_atual}!", flush=True)
+
+    while True:
+        try:
+            agora_ts = time.time()
+            houve_alteracao = False
+
+            for chat_id, info in list(usuarios.items()):
+                etapa = info.get("status")
+                prox_ts = info.get("proximo_rmk_em")
+
+                if etapa in ETAPAS_COM_REMARKETING and prox_ts is not None:
+                    if agora_ts >= float(prox_ts):
+                        contagem_atual = int(info.get("rmk_contagem", 0))
+                        proxima_contagem = contagem_atual + 1
+                        info["rmk_contagem"] = proxima_contagem
+                        info["proximo_rmk_em"] = agora_ts + obter_intervalo_segundos(proxima_contagem)
+                        houve_alteracao = True
+
+                        threading.Thread(
+                            target=executar_disparo_remarketing,
+                            args=(chat_id, etapa, contagem_atual),
+                            daemon=True
+                        ).start()
+
+            if houve_alteracao:
+                salvar_estado()
+
+            if agora_ts - _ultima_checagem_assinaturas >= 60:
+                _ultima_checagem_assinaturas = agora_ts
+                verificar_assinaturas_background()
+
+        except Exception as e:
+            print(f"❌ Erro no loop vigilante: {e}", flush=True)
+
+        time.sleep(5)
+
+
+def garantir_loop_worker():
+    global _worker_pid
+    pid_atual = os.getpid()
+    if _worker_pid != pid_atual:
+        with _lock_worker:
+            if _worker_pid != pid_atual:
+                _worker_pid = pid_atual
+                t = threading.Thread(target=_loop_vigilante_worker, daemon=True)
+                t.start()
+
+
+@app.before_request
+def antes_de_qualquer_requisicao():
+    garantir_loop_worker()
+
+
+# =====================================================================
 # FUNIL DE ENTRADA (/START E APROVAÇÃO AUTOMÁTICA DE PRÉVIAS)
 # =====================================================================
 def iniciar_fluxo_boas_vindas(chat_id):
-    garantir_scheduler_ativo()
+    garantir_loop_worker()
     chat_id = int(chat_id)
     usuarios[chat_id] = {
         "status": "INICIO_SEM_CLIQUE",
         "tx_id": None,
         "rmk_contagem": 0,
+        "proximo_rmk_em": time.time() + obter_intervalo_segundos(0),
         "plano_pendente": "7d",
         "inclui_playbox_pendente": False
     }
     salvar_estado()
+    print(f"⏰ [RMK PROGRAMADO] Lead: {chat_id} | Etapa: INICIO_SEM_CLIQUE | Passo: 1 | Em: 240s", flush=True)
 
     def envio_inicial():
         enviar_video(chat_id, VIDEO_1_GALERIA)
@@ -763,8 +774,7 @@ def iniciar_fluxo_boas_vindas(chat_id):
         }
         enviar_video(chat_id, VIDEO_2_D4, TEXTO_OFERTA_JAQUE, markup_planos)
 
-    threading.Thread(target=envio_inicial).start()
-    agendar_remarketing(chat_id, "INICIO_SEM_CLIQUE", 0)
+    threading.Thread(target=envio_inicial, daemon=True).start()
 
 
 # =====================================================================
@@ -772,24 +782,33 @@ def iniciar_fluxo_boas_vindas(chat_id):
 # =====================================================================
 @app.route("/", methods=["GET"])
 def home():
-    garantir_scheduler_ativo()
-    return f"Bot VIP Jaque Pink Ativo! | Jobs na fila: {len(scheduler.get_jobs())}", 200
+    garantir_loop_worker()
+    return f"Bot VIP Jaque Pink Ativo! | Worker PID: {_worker_pid} | Leads: {len(usuarios)}", 200
 
 
 @app.route("/status", methods=["GET"])
 def status_debug():
-    garantir_scheduler_ativo()
-    jobs = [{"id": j.id, "proxima_execucao": str(j.next_run_time)} for j in scheduler.get_jobs()]
+    garantir_loop_worker()
+    agora = time.time()
+    fila = []
+    for cid, info in usuarios.items():
+        prox = info.get("proximo_rmk_em")
+        fila.append({
+            "chat_id": cid,
+            "etapa": info.get("status"),
+            "proximo_passo": int(info.get("rmk_contagem", 0)) + 1,
+            "dispara_em_segundos": round(prox - agora, 1) if prox else None
+        })
     return {
-        "scheduler_ativo": scheduler.running,
+        "worker_pid": _worker_pid,
         "total_leads": len(usuarios),
-        "jobs_agendados": jobs
+        "fila_remarketing": fila
     }, 200
 
 
 @app.route("/setup", methods=["GET"])
 def setup_webhook():
-    garantir_scheduler_ativo()
+    garantir_loop_worker()
     webhook_url = f"https://{RENDER_URL_FIXA}/webhook/telegram/{TELEGRAM_BOT_TOKEN}"
     payload = {
         "url": webhook_url,
@@ -801,7 +820,7 @@ def setup_webhook():
 
 @app.route("/webhook/pushinpay", methods=["POST", "GET"])
 def pushinpay_webhook():
-    garantir_scheduler_ativo()
+    garantir_loop_worker()
     dados = request.get_json(force=True, silent=True)
     if not dados:
         dados = request.form.to_dict() if request.form else {}
@@ -830,7 +849,7 @@ def pushinpay_webhook():
 
 @app.route(f"/webhook/telegram/{TELEGRAM_BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
-    garantir_scheduler_ativo()
+    garantir_loop_worker()
     update = request.get_json(silent=True)
     if not update:
         return {"status": "ok"}, 200
@@ -844,13 +863,13 @@ def telegram_webhook():
 
         elif texto.startswith("/testar_rmk") and str(chat_id) == ADMIN_ID:
             info = usuarios.get(chat_id)
-            if not info:
+            if not info or info.get("status") not in ETAPAS_COM_REMARKETING:
                 enviar_mensagem(chat_id, "⚠️ Envie /start primeiro para entrar em uma etapa do funil.")
             else:
                 etapa = info.get("status")
                 cont = int(info.get("rmk_contagem", 0))
-                agendar_remarketing(chat_id, etapa, cont, atraso_segundos=5)
-                enviar_mensagem(chat_id, f"🧪 **Teste agendado!** O remarketing #{cont + 1} da etapa `{etapa}` vai disparar em **5 segundos**.")
+                programar_proximo_remarketing(chat_id, etapa, cont, atraso_customizado=3)
+                enviar_mensagem(chat_id, f"🧪 **Teste armado!** O remarketing #{cont + 1} da etapa `{etapa}` vai disparar em **3 segundos**.")
 
     elif "callback_query" in update:
         query = update["callback_query"]
@@ -864,9 +883,8 @@ def telegram_webhook():
             valor_combo = dados_plano["preco"] + PRECO_BUMP_PLAYBOX
 
             user_info = usuarios.setdefault(chat_id, {})
-            user_info["status"] = "VENDO_BUMP_PLAYBOX"
             user_info["plano_pendente"] = plano_cod
-            salvar_estado()
+            programar_proximo_remarketing(chat_id, "VENDO_BUMP_PLAYBOX", 0)
 
             def enviar_order_bump():
                 markup_bump = {
@@ -877,8 +895,7 @@ def telegram_webhook():
                 }
                 enviar_video(chat_id, VIDEO_3_PLAYBOX_OFERTA, TEXTO_BUMP_PLAYBOX, markup_bump)
 
-            threading.Thread(target=enviar_order_bump).start()
-            agendar_remarketing(chat_id, "VENDO_BUMP_PLAYBOX", 0)
+            threading.Thread(target=enviar_order_bump, daemon=True).start()
 
         elif botao in ["fechar_combo", "fechar_solo"]:
             user_info = usuarios.setdefault(chat_id, {})
@@ -890,7 +907,8 @@ def telegram_webhook():
 
             threading.Thread(
                 target=entregar_pix_completo,
-                args=(chat_id, valor_final, plano_cod, inclui_playbox, False)
+                args=(chat_id, valor_final, plano_cod, inclui_playbox, False),
+                daemon=True
             ).start()
 
         elif botao in ["renovar_7d", "renovar_30d", "renovar_vit"]:
@@ -900,7 +918,8 @@ def telegram_webhook():
 
             threading.Thread(
                 target=entregar_pix_completo,
-                args=(chat_id, valor_desconto, plano_cod, False, True)
+                args=(chat_id, valor_desconto, plano_cod, False, True),
+                daemon=True
             ).start()
 
         elif botao == "verificar_pagamento":
@@ -920,7 +939,7 @@ def telegram_webhook():
                         "⏳ *Pagamento ainda não identificado!*\n\nO banco ainda não confirmou o seu PIX. Assim que concluir no aplicativo do banco, toque em **Já fiz o pagamento! ✅** novamente."
                     )
 
-            threading.Thread(target=checar_pix).start()
+            threading.Thread(target=checar_pix, daemon=True).start()
 
     elif "chat_join_request" in update:
         req_entrada = update["chat_join_request"]

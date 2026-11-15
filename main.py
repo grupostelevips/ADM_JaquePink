@@ -11,10 +11,10 @@ app = Flask(__name__)
 # =====================================================================
 # CHAVES E CONFIGURAÇÕES (JÁ PREENCHIDAS COM OS DADOS DA JAQUE PINK)
 # =====================================================================
-TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qy100z-2ydEJzQF6C9gwkSOspFs"
+TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
 VIP_JAQUE_GROUP_ID = "-1002069121485"
 PREVIAS_JAQUE_GROUP_ID = "-1001994331287"
-RENDER_URL_FIXA = "adm-jaquepink.onrender.com"
+RENDER_URL_FIXA = "bot-jaquepink.onrender.com"
 
 PUSHINPAY_API_TOKEN = "73774|DCDTM4JGmuvz4MS4g5vPHy2ucM54PkCeQEu7QA4y49fe526b"
 ADMIN_ID = "7008304182"

@@ -17,7 +17,7 @@ scheduler.start()
 TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
 VIP_JAQUE_GROUP_ID = "-1002069121485"
 PREVIAS_JAQUE_GROUP_ID = "-1001994331287"
-RENDER_URL_FIXA = "bot-jaquepink.onrender.com"  # Troque pelo link real gerado no Render
+RENDER_URL_FIXA = "https://adm-jaquepink.onrender.com/"  # Troque pelo link real gerado no Render
 
 # Dados fixos já aproveitados da sua operação PlayBox
 PUSHINPAY_API_TOKEN = "73774|DCDTM4JGmuvz4MS4g5vPHy2ucM54PkCeQEu7QA4y49fe526b"

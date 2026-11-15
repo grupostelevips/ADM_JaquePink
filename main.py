@@ -12,12 +12,12 @@ scheduler = BackgroundScheduler(job_defaults={"coalesce": True, "max_instances":
 scheduler.start()
 
 # =====================================================================
-# CHAVES E CONFIGURAÇÕES (PREENCHA OS DADOS DA JAQUE PINK AQUI)
+# CHAVES E CONFIGURAÇÕES (MANTENHA SEUS DADOS DA JAQUE PINK AQUI)
 # =====================================================================
-TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
+ELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
 VIP_JAQUE_GROUP_ID = "-1002069121485"
 PREVIAS_JAQUE_GROUP_ID = "-1001994331287"
-RENDER_URL_FIXA = "adm-jaquepink.onrender.com"  # Troque pelo link real gerado no Render
+RENDER_URL_FIXA = "bot-jaquepink.onrender.com"
 
 # Dados fixos já aproveitados da sua operação PlayBox
 PUSHINPAY_API_TOKEN = "73774|DCDTM4JGmuvz4MS4g5vPHy2ucM54PkCeQEu7QA4y49fe526b"
@@ -37,7 +37,7 @@ usuarios = {}
 transacoes_processadas = set()
 
 # =====================================================================
-# MÍDIAS DO FUNIL (COLE OS FILE_IDs MP4 "BAAC..." AQUI)
+# MÍDIAS DO FUNIL (MANTENHA OS 4 FILE_IDs MP4 "BAAC..." AQUI)
 # =====================================================================
 VIDEO_1_GALERIA = "BAACAgEAAxkBAAMCavoug55fcXjT1El_G-E9Qt7SNlcAAqEIAAKHW9BH-qFU6cQ_aDg9BA"
 VIDEO_2_D4 = "BAACAgEAAxkBAAMDavoujCrKcf0PqyFqWfmLTTixV34AAqIIAAKHW9BHKijEHmQ7N2s9BA"
@@ -107,7 +107,7 @@ TEXTO_INSTRUCOES_PIX = (
     "⬇️ **COPIE SEU CÓDIGO PIX ABAIXO** ⬇️"
 )
 
-# Variações de copy para o Remarketing Infinito (alternando Galeria e D4)
+# Copys rotativas para Etapa 1, 3, 4 e 5 (intercalando Vídeo 1 Galeria e Vídeo 2 D4)
 COPYS_REMARKETING_ROTACAO = [
     (
         "🚕 **VOCÊ NÃO VIU COMO ESSA CORRIDA DO UBER TERMINOU...**\n\n"
@@ -133,9 +133,9 @@ COPYS_REMARKETING_ROTACAO = [
 
 COPY_REMARKETING_UNICORNIO = (
     "🦄 **ÚLTIMO AVISO DO UNICÓRNIO — SEU ACESSO ESTÁ EXPIRANDO!** 🚨\n\n"
-    "Você chegou até a etapa final para entrar no **VIP da Jaque Pink**, mas ainda não concluiu seu PIX.\n\n"
+    "Você está a um clique de entrar no **VIP da Jaque Pink**, mas ainda não concluiu seu acesso.\n\n"
     "Não fique de fora dos vídeos completos no Uber, com desconhecidos e os arquivos secretos com o titio.\n\n"
-    "⚡ **A liberação é automática em 5 segundos após o pagamento!**\n\n"
+    "⚡ **A liberação é automática em 5 segundos após o PIX!**\n\n"
     "👇 **TOQUE NO BOTÃO ABAIXO E ENTRE AGORA:**"
 )
 
@@ -144,6 +144,30 @@ COPY_REMARKETING_PLAYBOX_6 = (
     "Além do VIP da Jaque Pink, você pode desbloquear o **VIP Vitalício da PlayBox** (Casadas no sigilo, câmeras escondidas e +400 vazados) por apenas **+ R$ 7,90**!\n\n"
     "👇 **Aproveite essa condição antes que saia do ar:**"
 )
+
+# Copys exclusivas para o Remarketing da Etapa 2 (Order Bump PlayBox - sempre Vídeo 3)
+COPYS_REMARKETING_BUMP_PLAYBOX = [
+    (
+        "💣 **VOCÊ DEIXOU O VIP VITALÍCIO DA PLAYBOX PARA TRÁS...**\n\n"
+        "Por apenas **+ R$ 7,90**, você leva junto com o VIP da Jaque Pink o acesso **VITALÍCIO** ao acervo completo da PlayBox (casadas no sigilo, câmeras escondidas e +400 vazados).\n\n"
+        "👇 **Escolha abaixo para gerar seu PIX e entrar nos dois grupos agora:**"
+    ),
+    (
+        "🔥 **2 GRUPOS VIPS PELO PREÇO DE 1 — ÚLTIMA CHANCE!**\n\n"
+        "Seu plano da Jaque Pink já está selecionado. Adicione o **VIP Vitalício da PlayBox** por apenas **R$ 7,90** a mais e receba os dois links na hora!\n\n"
+        "👇 **Toque abaixo para finalizar seu PIX:**"
+    ),
+    (
+        "🔞 **CASADAS NO SIGILO + CÂMERAS ESCONDIDAS POR + R$ 7,90!**\n\n"
+        "Essa oferta de combo só aparece aqui antes do pagamento. Depois que sair dessa tela, o VIP da PlayBox volta para o valor normal.\n\n"
+        "👇 **Garanta o combo completo ou finalize apenas o VIP da Jaque:**"
+    ),
+    (
+        "⏳ **SEU COMBO PROMOCIONAL ESTÁ PRESTES A EXPIRAR!**\n\n"
+        "Finalize agora com o **VIP Vitalício da PlayBox** incluso ou siga apenas com o VIP da Jaque Pink.\n\n"
+        "👇 **Selecione uma opção abaixo para gerar o PIX:**"
+    )
+]
 
 
 # =====================================================================
@@ -172,9 +196,16 @@ def carregar_estado():
         usuarios = {int(k): v for k, v in dados.get("usuarios", {}).items()}
         transacoes_processadas = set(dados.get("transacoes", []))
 
+        etapas_ativas = [
+            "INICIO_SEM_CLIQUE",
+            "VENDO_BUMP_PLAYBOX",
+            "AGUARDANDO_PIX",
+            "RENOVANDO_PIX",
+            "EXPIROU_RENOVACAO"
+        ]
         for cid, info in usuarios.items():
             st = info.get("status")
-            if st in ["INICIO_SEM_CLIQUE", "VENDO_BUMP_PLAYBOX", "AGUARDANDO_PIX", "EXPIROU_RENOVACAO"]:
+            if st in etapas_ativas:
                 cont = int(info.get("rmk_contagem", 0))
                 agendar_remarketing(cid, st, cont)
     except Exception as e:
@@ -341,14 +372,18 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
         user_info["inclui_playbox_pendente"] = inclui_playbox
         user_info["eh_renovacao_pendente"] = eh_renovacao
 
-        # Se não for um assinante ainda ativo recebendo aviso antecipado, muda status para AGUARDANDO_PIX
-        if user_info.get("status") != "VIP_ATIVO":
+        # Define a etapa exata de remarketing conforme o momento do cliente
+        if user_info.get("status") == "VIP_ATIVO":
+            user_info["status"] = "RENOVANDO_PIX"
+        elif user_info.get("status") == "EXPIROU_RENOVACAO" or eh_renovacao:
+            user_info["status"] = "EXPIROU_RENOVACAO"
+        else:
             user_info["status"] = "AGUARDANDO_PIX"
 
         user_info["rmk_contagem"] = 0
         salvar_estado()
 
-        # Envia apenas texto de instruções (SEM IMAGEM conforme solicitado)
+        # Envia apenas texto de instruções (SEM IMAGEM)
         enviar_mensagem(chat_id, TEXTO_INSTRUCOES_PIX)
         time.sleep(0.4)
 
@@ -373,8 +408,7 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
         enviar_mensagem(chat_id, f"`{codigo_pix}`", markup_pix)
 
         # Sempre que gerar um PIX, reseta o timer e começa enviando o Vídeo Unicórnio
-        if user_info.get("status") in ["AGUARDANDO_PIX", "EXPIROU_RENOVACAO"]:
-            agendar_remarketing(chat_id, user_info["status"], 0)
+        agendar_remarketing(chat_id, user_info["status"], 0)
     else:
         enviar_mensagem(chat_id, f"❌ *Erro de comunicação com o banco. Tente novamente!*\n`{erro}`")
 
@@ -399,14 +433,14 @@ def processar_pagamento_aprovado(chat_id, tx_id=None):
     agora = datetime.now()
     dias_plano = dados_plano["dias"]
 
-    # Calcula nova data de expiração (soma aos dias restantes se já estava ativo)
+    # Calcula nova data de expiração (soma aos dias restantes se ainda não venceu)
     if dias_plano is None:
         nova_expiracao = None
         texto_validade = "👑 **Validade:** Acesso Vitalício (para sempre!)"
     else:
         exp_atual_str = user_info.get("expira_em")
         base_tempo = agora
-        if exp_atual_str and user_info.get("status") == "VIP_ATIVO":
+        if exp_atual_str and user_info.get("status") in ["VIP_ATIVO", "RENOVANDO_PIX"]:
             try:
                 exp_atual = datetime.fromisoformat(exp_atual_str)
                 if exp_atual > agora:
@@ -426,7 +460,7 @@ def processar_pagamento_aprovado(chat_id, tx_id=None):
     user_info["eh_renovacao_pendente"] = False
     salvar_estado()
 
-    # Cancela remarketing pendente pois o cliente pagou
+    # Cancela qualquer remarketing pendente pois o cliente pagou
     try:
         scheduler.remove_job(f"rmk_{chat_id}")
     except Exception:
@@ -453,7 +487,7 @@ def processar_pagamento_aprovado(chat_id, tx_id=None):
 
 
 # =====================================================================
-# MOTOR DE REMARKETING INFINITO (UNICÓRNIO -> GALERIA/D4 -> PLAYBOX)
+# MOTOR DE REMARKETING INFINITO EM TODAS AS ETAPAS
 # =====================================================================
 def agendar_remarketing(chat_id, tipo_funil, contagem):
     chat_id = int(chat_id)
@@ -493,7 +527,7 @@ def _montar_botoes_remarketing(chat_id, tipo_funil):
     plano_cod = user_info.get("plano_pendente") or user_info.get("plano_ativo") or "7d"
     dados_plano = PLANOS.get(plano_cod, PLANOS["7d"])
 
-    if tipo_funil == "EXPIROU_RENOVACAO":
+    if tipo_funil in ["EXPIROU_RENOVACAO", "RENOVANDO_PIX"]:
         return {
             "inline_keyboard": [
                 [{"text": f"🔄 Renovar 7 dias ({PLANOS['7d']['desconto_txt']}) - R$ {PLANOS['7d']['preco_renov']:.2f}", "callback_data": "renovar_7d"}],
@@ -521,6 +555,40 @@ def _montar_botoes_remarketing(chat_id, tipo_funil):
     }
 
 
+def _escolher_video_sequencia_padrao(contagem):
+    """
+    Sequência exata:
+    1º envio (contagem=0): Vídeo Unicórnio
+    2º envio (contagem=1): Vídeo 1 (Galeria)
+    3º envio (contagem=2): Vídeo 2 (D4)
+    4º envio (contagem=3): Vídeo Unicórnio (a cada 4 vídeos)
+    5º envio (contagem=4): Vídeo 1 (Galeria)
+    6º envio (contagem=5): Vídeo 3 (Oferta PlayBox - no 6º vídeo)
+    7º envio (contagem=6): Vídeo 2 (D4)
+    8º envio (contagem=7): Vídeo Unicórnio (a cada 4 vídeos)
+    ...e segue intercalando Vídeo 1 e Vídeo 2 entre os marcos!
+    """
+    num_envio = contagem + 1
+
+    if num_envio == 1 or num_envio % 4 == 0:
+        return VIDEO_4_UNICORNIO, COPY_REMARKETING_UNICORNIO
+
+    if num_envio % 6 == 0:
+        return VIDEO_3_PLAYBOX_OFERTA, COPY_REMARKETING_PLAYBOX_6
+
+    # Conta quantos disparos comuns (não-Unicórnio e não-PlayBox) já ocorreram antes deste
+    comuns_anteriores = sum(
+        1 for i in range(1, num_envio)
+        if i != 1 and (i % 4 != 0) and (i % 6 != 0)
+    )
+    copy_escolhida = COPYS_REMARKETING_ROTACAO[comuns_anteriores % len(COPYS_REMARKETING_ROTACAO)]
+
+    if comuns_anteriores % 2 == 0:
+        return VIDEO_1_GALERIA, copy_escolhida
+    else:
+        return VIDEO_2_D4, copy_escolhida
+
+
 def disparar_remarketing(chat_id, tipo_funil, contagem):
     chat_id = int(chat_id)
     status_atual = usuarios.get(chat_id, {}).get("status")
@@ -532,26 +600,17 @@ def disparar_remarketing(chat_id, tipo_funil, contagem):
         try:
             markup = _montar_botoes_remarketing(chat_id, tipo_funil)
 
-            # Regra exata solicitada:
-            # 1º envio (contagem == 0) -> Vídeo Unicórnio
-            # A cada 6 vídeos (contagem > 0 e % 6 == 0) -> Oferta VIP PlayBox
-            # A cada 4 vídeos (contagem % 4 == 0) -> Vídeo Unicórnio
-            # Demais envios -> Intercala VIDEO_1_GALERIA e VIDEO_2_D4 variando as copys
-            if contagem == 0:
-                enviar_video(chat_id, VIDEO_4_UNICORNIO, COPY_REMARKETING_UNICORNIO, markup)
+            # ETAPA 2 (Segunda Oferta / Order Bump PlayBox):
+            # Manda sempre o Vídeo 3 da PlayBox nos mesmos tempos (4m, 6m, 12m, 25m, 3h...)
+            if tipo_funil == "VENDO_BUMP_PLAYBOX":
+                copy_bump = COPYS_REMARKETING_BUMP_PLAYBOX[contagem % len(COPYS_REMARKETING_BUMP_PLAYBOX)]
+                enviar_video(chat_id, VIDEO_3_PLAYBOX_OFERTA, copy_bump, markup)
 
-            elif contagem % 6 == 0:
-                enviar_video(chat_id, VIDEO_3_PLAYBOX_OFERTA, COPY_REMARKETING_PLAYBOX_6, markup)
-
-            elif contagem % 4 == 0:
-                enviar_video(chat_id, VIDEO_4_UNICORNIO, COPY_REMARKETING_UNICORNIO, markup)
-
+            # ETAPAS 1, 3, 4 e 5:
+            # Começa com Unicórnio -> intercala Vídeo 1 (Galeria) e Vídeo 2 (D4) -> Unicórnio a cada 4 -> PlayBox no 6º
             else:
-                copy_escolhida = COPYS_REMARKETING_ROTACAO[contagem % len(COPYS_REMARKETING_ROTACAO)]
-                if contagem % 2 == 1:
-                    enviar_video(chat_id, VIDEO_1_GALERIA, copy_escolhida, markup)
-                else:
-                    enviar_video(chat_id, VIDEO_2_D4, copy_escolhida, markup)
+                video_id, legenda = _escolher_video_sequencia_padrao(contagem)
+                enviar_video(chat_id, video_id, legenda, markup)
 
         except Exception as e:
             print(f"Erro no remarketing ({chat_id}): {e}")
@@ -568,7 +627,7 @@ def verificar_assinaturas_background():
     alterou = False
 
     for chat_id, info in list(usuarios.items()):
-        if info.get("status") != "VIP_ATIVO":
+        if info.get("status") not in ["VIP_ATIVO", "RENOVANDO_PIX"]:
             continue
 
         exp_str = info.get("expira_em")

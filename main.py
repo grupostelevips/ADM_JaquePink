@@ -3,8 +3,14 @@ import json
 import requests
 import threading
 import time
+from contextlib import contextmanager
 from flask import Flask, request
 from datetime import datetime, timedelta
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 
 app = Flask(__name__)
 
@@ -26,6 +32,7 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 PUSHINPAY_API_URL = "https://api.pushinpay.com.br/api"
 
 ARQUIVO_ESTADO = "estado_jaque.json"
+ARQUIVO_LOCK = "estado_jaque.lock"
 lock_estado = threading.Lock()
 
 usuarios = {}
@@ -35,6 +42,7 @@ transacoes_processadas = set()
 _worker_pid = None
 _lock_worker = threading.Lock()
 _ultima_checagem_assinaturas = 0.0
+_ultimo_self_ping = 0.0
 
 # =====================================================================
 # MÍDIAS DO FUNIL (FILE_IDs ORIGINAIS EXATOS)
@@ -175,22 +183,27 @@ COPYS_REMARKETING_BUMP_PLAYBOX = [
 
 
 # =====================================================================
-# PERSISTÊNCIA DE ESTADO EM DISCO
+# PERSISTÊNCIA DE ESTADO EM DISCO (SINCRONIZADA ENTRE WORKERS)
 # =====================================================================
-def salvar_estado():
+@contextmanager
+def _trava_global_estado():
     with lock_estado:
+        f_lock = None
         try:
-            dados = {
-                "usuarios": {str(k): v for k, v in usuarios.items()},
-                "transacoes": list(transacoes_processadas)
-            }
-            with open(ARQUIVO_ESTADO, "w", encoding="utf-8") as f:
-                json.dump(dados, f, ensure_ascii=False)
-        except Exception as e:
-            print(f"Erro ao salvar estado: {e}", flush=True)
+            if fcntl is not None:
+                f_lock = open(ARQUIVO_LOCK, "w")
+                fcntl.flock(f_lock.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if f_lock is not None:
+                try:
+                    fcntl.flock(f_lock.fileno(), fcntl.LOCK_UN)
+                    f_lock.close()
+                except Exception:
+                    pass
 
 
-def carregar_estado():
+def _ler_disco_sem_lock():
     global usuarios, transacoes_processadas
     if not os.path.exists(ARQUIVO_ESTADO):
         return
@@ -200,7 +213,31 @@ def carregar_estado():
         usuarios = {int(k): v for k, v in dados.get("usuarios", {}).items()}
         transacoes_processadas = set(dados.get("transacoes", []))
     except Exception as e:
-        print(f"Erro ao carregar estado: {e}", flush=True)
+        print(f"Erro ao ler estado do disco: {e}", flush=True)
+
+
+def _gravar_disco_sem_lock():
+    try:
+        dados = {
+            "usuarios": {str(k): v for k, v in usuarios.items()},
+            "transacoes": list(transacoes_processadas)
+        }
+        tmp_arquivo = f"{ARQUIVO_ESTADO}.{os.getpid()}.tmp"
+        with open(tmp_arquivo, "w", encoding="utf-8") as f:
+            json.dump(dados, f, ensure_ascii=False)
+        os.replace(tmp_arquivo, ARQUIVO_ESTADO)
+    except Exception as e:
+        print(f"Erro ao gravar estado no disco: {e}", flush=True)
+
+
+def salvar_estado():
+    with _trava_global_estado():
+        _gravar_disco_sem_lock()
+
+
+def carregar_estado():
+    with _trava_global_estado():
+        _ler_disco_sem_lock()
 
 
 # =====================================================================
@@ -381,12 +418,14 @@ def obter_intervalo_segundos(contagem):
 def programar_proximo_remarketing(chat_id, etapa, contagem, atraso_customizado=None):
     garantir_loop_worker()
     chat_id = int(chat_id)
-    info = usuarios.setdefault(chat_id, {})
-    info["status"] = etapa
-    info["rmk_contagem"] = int(contagem)
     espera = int(atraso_customizado) if atraso_customizado is not None else obter_intervalo_segundos(contagem)
-    info["proximo_rmk_em"] = time.time() + espera
-    salvar_estado()
+    with _trava_global_estado():
+        _ler_disco_sem_lock()
+        info = usuarios.setdefault(chat_id, {})
+        info["status"] = etapa
+        info["rmk_contagem"] = int(contagem)
+        info["proximo_rmk_em"] = time.time() + espera
+        _gravar_disco_sem_lock()
     print(f"⏰ [RMK PROGRAMADO] Lead: {chat_id} | Etapa: {etapa} | Passo: {contagem + 1} | Em: {espera}s", flush=True)
 
 
@@ -471,18 +510,21 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
     codigo_pix, tx_id, erro = gerar_pix_pushinpay(valor_reais, chat_id)
 
     if codigo_pix:
-        user_info = usuarios.setdefault(chat_id, {})
-        user_info["tx_id"] = tx_id
-        user_info["plano_pendente"] = plano_codigo
-        user_info["inclui_playbox_pendente"] = inclui_playbox
-        user_info["eh_renovacao_pendente"] = eh_renovacao
+        with _trava_global_estado():
+            _ler_disco_sem_lock()
+            user_info = usuarios.setdefault(chat_id, {})
+            user_info["tx_id"] = tx_id
+            user_info["plano_pendente"] = plano_codigo
+            user_info["inclui_playbox_pendente"] = inclui_playbox
+            user_info["eh_renovacao_pendente"] = eh_renovacao
 
-        if user_info.get("status") in ["VIP_ATIVO", "RENOVANDO_PIX"]:
-            nova_etapa = "RENOVANDO_PIX"
-        elif user_info.get("status") == "EXPIROU_RENOVACAO" or eh_renovacao:
-            nova_etapa = "EXPIROU_RENOVACAO"
-        else:
-            nova_etapa = "AGUARDANDO_PIX"
+            if user_info.get("status") in ["VIP_ATIVO", "RENOVANDO_PIX"]:
+                nova_etapa = "RENOVANDO_PIX"
+            elif user_info.get("status") == "EXPIROU_RENOVACAO" or eh_renovacao:
+                nova_etapa = "EXPIROU_RENOVACAO"
+            else:
+                nova_etapa = "AGUARDANDO_PIX"
+            _gravar_disco_sem_lock()
 
         enviar_mensagem(chat_id, TEXTO_INSTRUCOES_PIX)
         time.sleep(0.4)
@@ -519,46 +561,49 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
 def processar_pagamento_aprovado(chat_id, tx_id=None):
     chat_id = int(chat_id)
 
-    if tx_id:
-        tx_norm = str(tx_id).lower()
-        if tx_norm in transacoes_processadas:
-            return True
-        transacoes_processadas.add(tx_norm)
+    with _trava_global_estado():
+        _ler_disco_sem_lock()
 
-    user_info = usuarios.setdefault(chat_id, {})
-    plano_cod = user_info.get("plano_pendente") or user_info.get("plano_ativo") or "7d"
-    inclui_playbox = bool(user_info.get("inclui_playbox_pendente", False))
-    dados_plano = PLANOS.get(plano_cod, PLANOS["7d"])
+        if tx_id:
+            tx_norm = str(tx_id).lower()
+            if tx_norm in transacoes_processadas:
+                return True
+            transacoes_processadas.add(tx_norm)
 
-    agora = datetime.now()
-    dias_plano = dados_plano["dias"]
+        user_info = usuarios.setdefault(chat_id, {})
+        plano_cod = user_info.get("plano_pendente") or user_info.get("plano_ativo") or "7d"
+        inclui_playbox = bool(user_info.get("inclui_playbox_pendente", False))
+        dados_plano = PLANOS.get(plano_cod, PLANOS["7d"])
 
-    if dias_plano is None:
-        nova_expiracao = None
-        texto_validade = "👑 **Validade:** Acesso Vitalício (para sempre!)"
-    else:
-        exp_atual_str = user_info.get("expira_em")
-        base_tempo = agora
-        if exp_atual_str and user_info.get("status") in ["VIP_ATIVO", "RENOVANDO_PIX"]:
-            try:
-                exp_atual = datetime.fromisoformat(exp_atual_str)
-                if exp_atual > agora:
-                    base_tempo = exp_atual
-            except Exception:
-                pass
-        dt_exp = base_tempo + timedelta(days=dias_plano)
-        nova_expiracao = dt_exp.isoformat()
-        texto_validade = f"📅 **Válido até:** {dt_exp.strftime('%d/%m/%Y às %H:%M')}"
+        agora = datetime.now()
+        dias_plano = dados_plano["dias"]
 
-    user_info["status"] = "VIP_ATIVO"
-    user_info["plano_ativo"] = plano_cod
-    user_info["expira_em"] = nova_expiracao
-    user_info["aviso_nivel"] = 0
-    user_info["tx_id"] = None
-    user_info["proximo_rmk_em"] = None
-    user_info["inclui_playbox_pendente"] = False
-    user_info["eh_renovacao_pendente"] = False
-    salvar_estado()
+        if dias_plano is None:
+            nova_expiracao = None
+            texto_validade = "👑 **Validade:** Acesso Vitalício (para sempre!)"
+        else:
+            exp_atual_str = user_info.get("expira_em")
+            base_tempo = agora
+            if exp_atual_str and user_info.get("status") in ["VIP_ATIVO", "RENOVANDO_PIX"]:
+                try:
+                    exp_atual = datetime.fromisoformat(exp_atual_str)
+                    if exp_atual > agora:
+                        base_tempo = exp_atual
+                except Exception:
+                    pass
+            dt_exp = base_tempo + timedelta(days=dias_plano)
+            nova_expiracao = dt_exp.isoformat()
+            texto_validade = f"📅 **Válido até:** {dt_exp.strftime('%d/%m/%Y às %H:%M')}"
+
+        user_info["status"] = "VIP_ATIVO"
+        user_info["plano_ativo"] = plano_cod
+        user_info["expira_em"] = nova_expiracao
+        user_info["aviso_nivel"] = 0
+        user_info["tx_id"] = None
+        user_info["proximo_rmk_em"] = None
+        user_info["inclui_playbox_pendente"] = False
+        user_info["eh_renovacao_pendente"] = False
+        _gravar_disco_sem_lock()
 
     link_jaque = gerar_link_convite_unico(VIP_JAQUE_GROUP_ID) or "LINK_VIP_JAQUE_AQUI"
     mensagem_entrega = (
@@ -585,33 +630,59 @@ def processar_pagamento_aprovado(chat_id, tx_id=None):
 # =====================================================================
 def verificar_assinaturas_background():
     agora = datetime.now()
-    alterou = False
+    acoes_pendentes = []
 
-    for chat_id, info in list(usuarios.items()):
-        if info.get("status") not in ["VIP_ATIVO", "RENOVANDO_PIX"]:
-            continue
+    with _trava_global_estado():
+        _ler_disco_sem_lock()
+        alterou = False
 
-        exp_str = info.get("expira_em")
-        if not exp_str:
-            continue
+        for chat_id, info in list(usuarios.items()):
+            if info.get("status") not in ["VIP_ATIVO", "RENOVANDO_PIX"]:
+                continue
 
-        try:
-            dt_exp = datetime.fromisoformat(exp_str)
-        except Exception:
-            continue
+            exp_str = info.get("expira_em")
+            if not exp_str:
+                continue
 
-        horas_restantes = (dt_exp - agora).total_seconds() / 3600.0
-        aviso_nivel = int(info.get("aviso_nivel", 0))
-        plano_atual = info.get("plano_ativo", "7d")
+            try:
+                dt_exp = datetime.fromisoformat(exp_str)
+            except Exception:
+                continue
+
+            horas_restantes = (dt_exp - agora).total_seconds() / 3600.0
+            aviso_nivel = int(info.get("aviso_nivel", 0))
+            plano_atual = info.get("plano_ativo", "7d")
+            dados_plano = PLANOS.get(plano_atual, PLANOS["7d"])
+
+            if horas_restantes <= 0:
+                info["status"] = "EXPIROU_RENOVACAO"
+                info["rmk_contagem"] = 1
+                info["proximo_rmk_em"] = time.time() + obter_intervalo_segundos(1)
+                alterou = True
+                acoes_pendentes.append(("expirado", chat_id, plano_atual))
+
+            elif horas_restantes <= 1.0 and aviso_nivel < 3:
+                info["aviso_nivel"] = 3
+                alterou = True
+                acoes_pendentes.append(("aviso_1h", chat_id, plano_atual))
+
+            elif horas_restantes <= 6.0 and aviso_nivel < 2:
+                info["aviso_nivel"] = 2
+                alterou = True
+                acoes_pendentes.append(("aviso_6h", chat_id, plano_atual))
+
+            elif horas_restantes <= 24.0 and aviso_nivel < 1:
+                info["aviso_nivel"] = 1
+                alterou = True
+                acoes_pendentes.append(("aviso_24h", chat_id, plano_atual))
+
+        if alterou:
+            _gravar_disco_sem_lock()
+
+    for tipo_acao, chat_id, plano_atual in acoes_pendentes:
         dados_plano = PLANOS.get(plano_atual, PLANOS["7d"])
-
-        if horas_restantes <= 0:
+        if tipo_acao == "expirado":
             remover_usuario_vip(chat_id)
-            info["status"] = "EXPIROU_RENOVACAO"
-            info["rmk_contagem"] = 1
-            info["proximo_rmk_em"] = time.time() + obter_intervalo_segundos(1)
-            alterou = True
-
             markup_exp = _montar_botoes_remarketing(chat_id, "EXPIROU_RENOVACAO")
             texto_expirou = (
                 "🚨 **SEU ACESSO AO VIP DA JAQUE PINK EXPIROU!**\n\n"
@@ -624,9 +695,7 @@ def verificar_assinaturas_background():
             )
             enviar_video(chat_id, VIDEO_4_UNICORNIO, texto_expirou, markup_exp)
 
-        elif horas_restantes <= 1.0 and aviso_nivel < 3:
-            info["aviso_nivel"] = 3
-            alterou = True
+        elif tipo_acao == "aviso_1h":
             markup_aviso = {
                 "inline_keyboard": [
                     [{"text": f"⚡ Renovar {dados_plano['nome']} ({dados_plano['desconto_txt']}) — R$ {dados_plano['preco_renov']:.2f}", "callback_data": f"renovar_{plano_atual}"}],
@@ -640,9 +709,7 @@ def verificar_assinaturas_background():
                 markup_aviso
             )
 
-        elif horas_restantes <= 6.0 and aviso_nivel < 2:
-            info["aviso_nivel"] = 2
-            alterou = True
+        elif tipo_acao == "aviso_6h":
             markup_aviso = {
                 "inline_keyboard": [
                     [{"text": f"🔄 Renovar {dados_plano['nome']} ({dados_plano['desconto_txt']}) — R$ {dados_plano['preco_renov']:.2f}", "callback_data": f"renovar_{plano_atual}"}],
@@ -657,9 +724,7 @@ def verificar_assinaturas_background():
                 markup_aviso
             )
 
-        elif horas_restantes <= 24.0 and aviso_nivel < 1:
-            info["aviso_nivel"] = 1
-            alterou = True
+        elif tipo_acao == "aviso_24h":
             enviar_mensagem(
                 chat_id,
                 f"🦄 **SEU VIP DA JAQUE PINK VENCE EM MENOS DE 24 HORAS!**\n\n"
@@ -674,47 +739,57 @@ def verificar_assinaturas_background():
             )
             entregar_pix_completo(chat_id, dados_plano["preco_renov"], plano_atual, inclui_playbox=False, eh_renovacao=True)
 
-    if alterou:
-        salvar_estado()
-
 
 # =====================================================================
 # LOOP PRINCIPAL DO WORKER (RODA A CADA 5 SEGUNDOS SEM FALHAR)
 # =====================================================================
 def _loop_vigilante_worker():
-    global _ultima_checagem_assinaturas
+    global _ultima_checagem_assinaturas, _ultimo_self_ping
     pid_atual = os.getpid()
     print(f"🚀 Motor de Remarketing iniciado com sucesso no PID {pid_atual}!", flush=True)
 
     while True:
         try:
             agora_ts = time.time()
-            houve_alteracao = False
+            disparos_devidos = []
 
-            for chat_id, info in list(usuarios.items()):
-                etapa = info.get("status")
-                prox_ts = info.get("proximo_rmk_em")
+            with _trava_global_estado():
+                _ler_disco_sem_lock()
+                houve_alteracao = False
 
-                if etapa in ETAPAS_COM_REMARKETING and prox_ts is not None:
-                    if agora_ts >= float(prox_ts):
-                        contagem_atual = int(info.get("rmk_contagem", 0))
-                        proxima_contagem = contagem_atual + 1
-                        info["rmk_contagem"] = proxima_contagem
-                        info["proximo_rmk_em"] = agora_ts + obter_intervalo_segundos(proxima_contagem)
-                        houve_alteracao = True
+                for chat_id, info in list(usuarios.items()):
+                    etapa = info.get("status")
+                    prox_ts = info.get("proximo_rmk_em")
 
-                        threading.Thread(
-                            target=executar_disparo_remarketing,
-                            args=(chat_id, etapa, contagem_atual),
-                            daemon=True
-                        ).start()
+                    if etapa in ETAPAS_COM_REMARKETING and prox_ts is not None:
+                        if agora_ts >= float(prox_ts):
+                            contagem_atual = int(info.get("rmk_contagem", 0))
+                            proxima_contagem = contagem_atual + 1
+                            info["rmk_contagem"] = proxima_contagem
+                            info["proximo_rmk_em"] = agora_ts + obter_intervalo_segundos(proxima_contagem)
+                            houve_alteracao = True
+                            disparos_devidos.append((chat_id, etapa, contagem_atual))
 
-            if houve_alteracao:
-                salvar_estado()
+                if houve_alteracao:
+                    _gravar_disco_sem_lock()
+
+            for chat_id, etapa, contagem_atual in disparos_devidos:
+                threading.Thread(
+                    target=executar_disparo_remarketing,
+                    args=(chat_id, etapa, contagem_atual),
+                    daemon=True
+                ).start()
 
             if agora_ts - _ultima_checagem_assinaturas >= 60:
                 _ultima_checagem_assinaturas = agora_ts
                 verificar_assinaturas_background()
+
+            if agora_ts - _ultimo_self_ping >= 240:
+                _ultimo_self_ping = agora_ts
+                threading.Thread(
+                    target=lambda: requests.get(f"https://{RENDER_URL_FIXA}/", timeout=10),
+                    daemon=True
+                ).start()
 
         except Exception as e:
             print(f"❌ Erro no loop vigilante: {e}", flush=True)
@@ -744,15 +819,17 @@ def antes_de_qualquer_requisicao():
 def iniciar_fluxo_boas_vindas(chat_id):
     garantir_loop_worker()
     chat_id = int(chat_id)
-    usuarios[chat_id] = {
-        "status": "INICIO_SEM_CLIQUE",
-        "tx_id": None,
-        "rmk_contagem": 0,
-        "proximo_rmk_em": time.time() + obter_intervalo_segundos(0),
-        "plano_pendente": "7d",
-        "inclui_playbox_pendente": False
-    }
-    salvar_estado()
+    with _trava_global_estado():
+        _ler_disco_sem_lock()
+        usuarios[chat_id] = {
+            "status": "INICIO_SEM_CLIQUE",
+            "tx_id": None,
+            "rmk_contagem": 0,
+            "proximo_rmk_em": time.time() + obter_intervalo_segundos(0),
+            "plano_pendente": "7d",
+            "inclui_playbox_pendente": False
+        }
+        _gravar_disco_sem_lock()
     print(f"⏰ [RMK PROGRAMADO] Lead: {chat_id} | Etapa: INICIO_SEM_CLIQUE | Passo: 1 | Em: 240s", flush=True)
 
     def envio_inicial():
@@ -777,12 +854,14 @@ def iniciar_fluxo_boas_vindas(chat_id):
 @app.route("/", methods=["GET"])
 def home():
     garantir_loop_worker()
+    carregar_estado()
     return f"Bot VIP Jaque Pink Ativo! | Worker PID: {_worker_pid} | Leads: {len(usuarios)}", 200
 
 
 @app.route("/status", methods=["GET"])
 def status_debug():
     garantir_loop_worker()
+    carregar_estado()
     agora = time.time()
     fila = []
     for cid, info in usuarios.items():
@@ -829,6 +908,7 @@ def pushinpay_webhook():
     chat_id = request.args.get("chat_id") or dados.get("external_reference")
 
     if not chat_id and tx_id:
+        carregar_estado()
         tx_norm = str(tx_id).lower()
         for cid, info in usuarios.items():
             if str(info.get("tx_id", "")).lower() == tx_norm:
@@ -859,6 +939,7 @@ def telegram_webhook():
             iniciar_fluxo_boas_vindas(chat_id)
 
         elif texto.startswith("/testar_rmk") and str(chat_id) == ADMIN_ID:
+            carregar_estado()
             info = usuarios.get(chat_id)
             if not info or info.get("status") not in ETAPAS_COM_REMARKETING:
                 enviar_mensagem(chat_id, "⚠️ Envie /start primeiro para entrar em uma etapa do funil.")
@@ -879,8 +960,11 @@ def telegram_webhook():
             dados_plano = PLANOS[plano_cod]
             valor_combo = dados_plano["preco"] + PRECO_BUMP_PLAYBOX
 
-            user_info = usuarios.setdefault(chat_id, {})
-            user_info["plano_pendente"] = plano_cod
+            with _trava_global_estado():
+                _ler_disco_sem_lock()
+                user_info = usuarios.setdefault(chat_id, {})
+                user_info["plano_pendente"] = plano_cod
+                _gravar_disco_sem_lock()
             programar_proximo_remarketing(chat_id, "VENDO_BUMP_PLAYBOX", 0)
 
             def enviar_order_bump():
@@ -895,6 +979,7 @@ def telegram_webhook():
             threading.Thread(target=enviar_order_bump, daemon=True).start()
 
         elif botao in ["fechar_combo", "fechar_solo"]:
+            carregar_estado()
             user_info = usuarios.setdefault(chat_id, {})
             plano_cod = user_info.get("plano_pendente", "7d")
             dados_plano = PLANOS.get(plano_cod, PLANOS["7d"])
@@ -920,6 +1005,7 @@ def telegram_webhook():
             ).start()
 
         elif botao == "verificar_pagamento":
+            carregar_estado()
             tx_id = usuarios.get(chat_id, {}).get("tx_id")
 
             def checar_pix():
@@ -953,6 +1039,7 @@ def telegram_webhook():
             except Exception as e:
                 print(f"Erro ao aprovar entrada prévias Jaque ({user_id}): {e}", flush=True)
 
+            carregar_estado()
             if CHAMAR_NO_PRIVADO_AO_APROVAR and user_id not in usuarios:
                 iniciar_fluxo_boas_vindas(user_id)
 

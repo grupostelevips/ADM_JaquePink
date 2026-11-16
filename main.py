@@ -11,10 +11,10 @@ app = Flask(__name__)
 # =====================================================================
 # CHAVES E CONFIGURAÇÕES
 # =====================================================================
-TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qy100z-2ydEJzQF6C9gwkSOspFs"
+TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
 VIP_JAQUE_GROUP_ID = "-1002069121485"
 PREVIAS_JAQUE_GROUP_ID = "-1001994331287"
-RENDER_URL_FIXA = "adm-jaquepink.onrender.com"
+RENDER_URL_FIXA = "bot-jaquepink.onrender.com"
 
 PUSHINPAY_API_TOKEN = "73774|DCDTM4JGmuvz4MS4g5vPHy2ucM54PkCeQEu7QA4y49fe526b"
 ADMIN_ID = "7008304182"
@@ -39,10 +39,10 @@ _ultima_checagem_assinaturas = 0.0
 # =====================================================================
 # MÍDIAS DO FUNIL (FILE_IDs ORIGINAIS EXATOS)
 # =====================================================================
-VIDEO_1_GALERIA = "BAACAgEAAxkBAAMCavoug55fcXjT1El_G-E9Qt7SN1cAAqEIAAKHW9BH-qFU6cQ_aDg9BA"
-VIDEO_2_D4 = "BAACAgEAAxkBAAMDavoujCrKcf0PqyFqWfMLT1xV34AAqIIAAKHW9BHK1jEHmQ7N2s9BA"
-VIDEO_3_PLAYBOX_OFERTA = "BAACAgEAAxkBAAMFavowGAKrK-hWzVhtrREdnFf-fSMAaqQIAAKHW9BHvU0d7s-Qrjw9BA"
-VIDEO_4_UNICORNIO = "BAACAgEAAxkBAAMEavou12GdWHGb310Bkj7718ZW4AYAAqMIAAKHW9BHvYpbp0FwBXg9BA"
+VIDEO_1_GALERIA = "BAACAgEAAxkBAAMCavoug55fcXjT1El_G-E9Qt7SNlcAAqEIAAKHW9BH-qFU6cQ_aDg9BA"
+VIDEO_2_D4 = "BAACAgEAAxkBAAMDavoujCrKcf0PqyFqWfmLTTixV34AAqIIAAKHW9BHKijEHmQ7N2s9BA"
+VIDEO_3_PLAYBOX_OFERTA = "BAACAgEAAxkBAAMFavowGAKrK-hWzVhtrREdnFf-fSMAAqQIAAKHW9BHvUOd7s-Qrjw9BA"
+VIDEO_4_UNICORNIO = "BAACAgEAAxkBAAMEavoulZGdWHGb31O8Kj77i8ZW4AYAAqMIAAKHW9BHvYPbp0FwBXg9BA"
 
 # =====================================================================
 # TABELA DE PLANOS, ORDER BUMP E DESCONTOS DE RENOVAÇÃO

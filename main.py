@@ -9,9 +9,9 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 
 # =====================================================================
-# CHAVES E CONFIGURAÇÕES (JÁ PREENCHIDAS COM OS DADOS DA JAQUE PINK)
+# CHAVES E CONFIGURAÇÕES
 # =====================================================================
-TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qyl00z-2ydEJzQf6C9gwkSOspFs"
+TELEGRAM_BOT_TOKEN = "9270658230:AAEeAq0-qy100z-2ydEJzQF6C9gwkSOspFs"
 VIP_JAQUE_GROUP_ID = "-1002069121485"
 PREVIAS_JAQUE_GROUP_ID = "-1001994331287"
 RENDER_URL_FIXA = "adm-jaquepink.onrender.com"
@@ -37,12 +37,12 @@ _lock_worker = threading.Lock()
 _ultima_checagem_assinaturas = 0.0
 
 # =====================================================================
-# MÍDIAS DO FUNIL (JÁ PREENCHIDAS COM SEUS 4 FILE_IDs)
+# MÍDIAS DO FUNIL (FILE_IDs ORIGINAIS EXATOS)
 # =====================================================================
-VIDEO_1_GALERIA = "BAACAgEAAxkBAAMCavoug55fcXjT1El_G-E9Qt7SNlcAAqEIAAKHW9BH-qFU6cQ_aDg9BA"
-VIDEO_2_D4 = "BAACAgEAAxkBAAMDavoujCrKcf0PqyFqWfmLTTixV34AAqIIAAKHW9BHKijEHmQ7N2s9BA"
-VIDEO_3_PLAYBOX_OFERTA = "BAACAgEAAxkBAAMFavowGAKrK-hWzVhtrREdnFf-fSMAAqQIAAKHW9BHvUOd7s-Qrjw9BA"
-VIDEO_4_UNICORNIO = "BAACAgEAAxkBAAMEavoulZGdWHGb31O8Kj77i8ZW4AYAAqMIA AKHW9BHvYPbp0FwBXg9BA"
+VIDEO_1_GALERIA = "BAACAgEAAxkBAAMCavoug55fcXjT1El_G-E9Qt7SN1cAAqEIAAKHW9BH-qFU6cQ_aDg9BA"
+VIDEO_2_D4 = "BAACAgEAAxkBAAMDavoujCrKcf0PqyFqWfMLT1xV34AAqIIAAKHW9BHK1jEHmQ7N2s9BA"
+VIDEO_3_PLAYBOX_OFERTA = "BAACAgEAAxkBAAMFavowGAKrK-hWzVhtrREdnFf-fSMAaqQIAAKHW9BHvU0d7s-Qrjw9BA"
+VIDEO_4_UNICORNIO = "BAACAgEAAxkBAAMEavou12GdWHGb310Bkj7718ZW4AYAAqMIAAKHW9BHvYpbp0FwBXg9BA"
 
 # =====================================================================
 # TABELA DE PLANOS, ORDER BUMP E DESCONTOS DE RENOVAÇÃO
@@ -118,6 +118,15 @@ TEXTO_INSTRUCOES_PIX = (
     "⬇️ **COPIE SEU CÓDIGO PIX ABAIXO** ⬇️"
 )
 
+# Copy do Vídeo 4 (sem mencionar codinome interno)
+COPY_REMARKETING_VIDEO_4 = (
+    "🚨 **SUA VAGA NO VIP DA JAQUE PINK ESTÁ PRESTES A EXPIRAR!** 🚨\n\n"
+    "Você está a um clique de liberar os vídeos completos no Uber, os encontros com desconhecidos e os arquivos secretos com o titio — tudo sem cortes e sem tarjas.\n\n"
+    "⚡ **A liberação do seu acesso é automática em 5 segundos após o PIX!**\n\n"
+    "👇 **TOQUE NO BOTÃO ABAIXO E ENTRE AGORA:**"
+)
+
+# Copys rotativas para os 4 disparos intercalando Vídeo 1 e Vídeo 2
 COPYS_REMARKETING_ROTACAO = [
     (
         "🚕 **VOCÊ NÃO VIU COMO ESSA CORRIDA DO UBER TERMINOU...**\n\n"
@@ -131,7 +140,7 @@ COPYS_REMARKETING_ROTACAO = [
     ),
     (
         "🔥 **ENCONTROS REAIS COM DESCONHECIDOS NO SIGILO!**\n\n"
-        "Mais de centenas de vídeos completos da Jaque Pink + atualizações novas toda semana direto no seu celular.\n\n"
+        "Centenas de vídeos completos da Jaque Pink + atualizações novas toda semana direto no seu celular.\n\n"
         "👇 **Libere seu acesso imediato via PIX:**"
     ),
     (
@@ -140,20 +149,6 @@ COPYS_REMARKETING_ROTACAO = [
         "👇 **Garanta sua entrada agora:**"
     )
 ]
-
-COPY_REMARKETING_UNICORNIO = (
-    "🦄 **ÚLTIMO AVISO DO UNICÓRNIO — SEU ACESSO ESTÁ EXPIRANDO!** 🚨\n\n"
-    "Você está a um clique de entrar no **VIP da Jaque Pink**, mas ainda não concluiu seu acesso.\n\n"
-    "Não fique de fora dos vídeos completos no Uber, com desconhecidos e os arquivos secretos com o titio.\n\n"
-    "⚡ **A liberação é automática em 5 segundos após o PIX!**\n\n"
-    "👇 **TOQUE NO BOTÃO ABAIXO E ENTRE AGORA:**"
-)
-
-COPY_REMARKETING_PLAYBOX_6 = (
-    "💣 **QUER LEVAR O ACERVO COMPLETO DA PLAYBOX JUNTO?** 🔥\n\n"
-    "Além do VIP da Jaque Pink, você pode desbloquear o **VIP Vitalício da PlayBox** (Casadas no sigilo, câmeras escondidas e +400 vazados) por apenas **+ R$ 7,90**!\n\n"
-    "👇 **Aproveite essa condição antes que saia do ar:**"
-)
 
 COPYS_REMARKETING_BUMP_PLAYBOX = [
     (
@@ -376,7 +371,7 @@ def consultar_pagamento_pushinpay(tx_id):
 
 
 # =====================================================================
-# AGENDAMENTO E DISPARO DO REMARKETING (PURO PYTHON / IMUNE A FORK)
+# AGENDAMENTO E SEQUÊNCIA INFINITA DO REMARKETING
 # =====================================================================
 def obter_intervalo_segundos(contagem):
     idx = min(int(contagem), len(TEMPOS_REMARKETING_SEGUNDOS) - 1)
@@ -428,24 +423,23 @@ def _montar_botoes_remarketing(chat_id, tipo_funil):
 
 
 def _escolher_video_sequencia_padrao(contagem):
-    num_envio = contagem + 1
+    """
+    Ciclo infinito exato de 5 passos:
+    Passo 1 (pos 0): Vídeo 4
+    Passo 2 (pos 1): Vídeo 1
+    Passo 3 (pos 2): Vídeo 2
+    Passo 4 (pos 3): Vídeo 1
+    Passo 5 (pos 4): Vídeo 2
+    Passo 6 (pos 0): Vídeo 4 -> repete infinitamente!
+    """
+    pos = contagem % 5
 
-    # 1º envio e a cada 4 vídeos -> Vídeo Unicórnio
-    if num_envio == 1 or num_envio % 4 == 0:
-        return VIDEO_4_UNICORNIO, COPY_REMARKETING_UNICORNIO
+    if pos == 0:
+        return VIDEO_4_UNICORNIO, COPY_REMARKETING_VIDEO_4
 
-    # 6º vídeo (e múltiplos de 6 que não caíram no 4) -> Oferta VIP PlayBox
-    if num_envio % 6 == 0:
-        return VIDEO_3_PLAYBOX_OFERTA, COPY_REMARKETING_PLAYBOX_6
+    copy_escolhida = COPYS_REMARKETING_ROTACAO[(contagem - 1) % len(COPYS_REMARKETING_ROTACAO)]
 
-    # Demais envios -> Intercala Vídeo 1 (Galeria) e Vídeo 2 (D4) variando as copys
-    comuns_anteriores = sum(
-        1 for i in range(1, num_envio)
-        if i != 1 and (i % 4 != 0) and (i % 6 != 0)
-    )
-    copy_escolhida = COPYS_REMARKETING_ROTACAO[comuns_anteriores % len(COPYS_REMARKETING_ROTACAO)]
-
-    if comuns_anteriores % 2 == 0:
+    if pos in (1, 3):
         return VIDEO_1_GALERIA, copy_escolhida
     else:
         return VIDEO_2_D4, copy_escolhida
@@ -483,7 +477,7 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
         user_info["inclui_playbox_pendente"] = inclui_playbox
         user_info["eh_renovacao_pendente"] = eh_renovacao
 
-        if user_info.get("status") == "VIP_ATIVO":
+        if user_info.get("status") in ["VIP_ATIVO", "RENOVANDO_PIX"]:
             nova_etapa = "RENOVANDO_PIX"
         elif user_info.get("status") == "EXPIROU_RENOVACAO" or eh_renovacao:
             nova_etapa = "EXPIROU_RENOVACAO"
@@ -513,7 +507,7 @@ def entregar_pix_completo(chat_id, valor_reais, plano_codigo, inclui_playbox=Fal
         }
         enviar_mensagem(chat_id, f"`{codigo_pix}`", markup_pix)
 
-        # Reseta sempre o tempo do remarketing para o início (4 min -> Vídeo Unicórnio)
+        # Reseta o tempo e reinicia sempre pelo Vídeo 4
         programar_proximo_remarketing(chat_id, nova_etapa, 0)
     else:
         enviar_mensagem(chat_id, f"❌ *Erro de comunicação com o banco. Tente novamente!*\n`{erro}`")
@@ -841,8 +835,11 @@ def pushinpay_webhook():
                 chat_id = cid
                 break
 
-    if status in ["paid", "approved", "concluded", "settled"] and chat_id:
-        processar_pagamento_aprovado(chat_id, tx_id)
+    if chat_id:
+        if status in ["paid", "approved", "concluded", "settled"]:
+            processar_pagamento_aprovado(chat_id, tx_id)
+        elif tx_id and consultar_pagamento_pushinpay(tx_id):
+            processar_pagamento_aprovado(chat_id, tx_id)
 
     return {"status": "ok"}, 200
 
@@ -963,6 +960,7 @@ def telegram_webhook():
 
 
 carregar_estado()
+garantir_loop_worker()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
